@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <!-- Optimizado para pantallas de celular -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Contador de Frutas</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #121212;
+            color: white;
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #hud {
+            position: absolute;
+            top: 15px;
+            z-index: 10;
+            background: rgba(0,0,0,0.7);
+            padding: 10px 20px;
+            border-radius: 10px;
+            display: flex;
+            gap: 20px;
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+        .counter {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        #canvas-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+        video, canvas {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Panel de conteo flotante -->
+    <div id="hud">
+        <div class="counter" style="color: #FFD700;">🍋 Limones: <span id="limones">0</span></div>
+        <div class="counter" style="color: #FF8C00;">🍊 Naranjas: <span id="naranjas">0</span></div>
+    </div>
+
+    <div id="canvas-container">
+        <!-- Cámara oculta que procesa el video -->
+        <video id="webcam" autoplay playsinline muted style="display:none;"></video>
+        <!-- Canvas visible donde dibujamos el video y los cuadros de detección -->
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <!-- 1. Importa primero el JS generado por Emscripten que ya tienes -->
+    <script src="edge-impulse-standalone.js"></script> 
+    <!-- 2. Tu script de lógica de la aplicación -->
+    <script src="app.js"></script>
+</body>
+</html>
