@@ -5,77 +5,38 @@ const ctx = canvas.getContext('2d');
 const limonSpan = document.getElementById('limones');
 const naranjasSpan = document.getElementById('naranjas');
 
-let classifierModule = null;
-let classifierInstance = null;
+let classifier = null;
 
-// Forzar alertas en el celular si ocurre algún fallo en JS
+// Reportar cualquier error en pantalla de forma visual
 window.onerror = function(message, source, lineno, colno, error) {
-    alert("Error de JavaScript: " + message + " en línea " + lineno);
+    alert("Error: " + message + " en línea " + lineno);
     return false;
 };
 
-// 1. Esperar a que la página cargue por completo
-window.addEventListener('load', () => {
-    console.log("Página cargada. Inicializando modelo...");
+// 1. Inicializar la librería de clasificación
+window.addEventListener('load', async () => {
+    console.log("Inicializando clasificador...");
     
-    if (typeof Module === 'undefined') {
-        alert("Error crítico: El archivo 'edge-impulse-standalone.js' no se ha cargado.");
-        return;
-    }
-
     try {
-        if (typeof Module === 'function') {
-            Module().then(module => {
-                classifierModule = module;
-                detectSDKMethods(module);
-            }).catch(err => {
-                alert("Error al inicializar (Función): " + err.message);
-            });
-        } else if (typeof Module === 'object') {
-            classifierModule = Module;
-            if (Module.onRuntimeInitialized) {
-                Module.onRuntimeInitialized = function() {
-                    detectSDKMethods(Module);
-                };
-            } else {
-                detectSDKMethods(Module);
-            }
+        // EdgeImpulseClassifier es proveído por la librería 'run-impulse.js' que añadimos al HTML
+        if (typeof EdgeImpulseClassifier === 'undefined') {
+            alert("Falta cargar la librería run-impulse.js de Edge Impulse.");
+            return;
         }
+
+        // Inicializar el clasificador utilizando tu módulo WebAssembly de Emscripten
+        classifier = new EdgeImpulseClassifier();
+        await classifier.init();
+        
+        alert("¡Modelo de Edge Impulse cargado correctamente! Iniciando cámara...");
+        startCamera();
+        
     } catch (err) {
-        alert("Error durante la inicialización del modelo: " + err.message);
+        alert("Error cargando el modelo: " + err.message);
     }
 });
 
-// Función para diagnosticar cómo inicializar el clasificador de Edge Impulse
-function detectSDKMethods(module) {
-    let metodosDisponibles = [];
-    
-    // Buscar funciones típicas en el módulo
-    if (typeof EdgeImpulseClassifier !== 'undefined') {
-        try {
-            classifierInstance = new EdgeImpulseClassifier(module);
-            metodosDisponibles.push("Instanciado con EdgeImpulseClassifier");
-        } catch(e) {
-            metodosDisponibles.push("Fallo EdgeImpulseClassifier: " + e.message);
-        }
-    }
-    
-    for (let prop in module) {
-        if (typeof module[prop] === 'function' && (prop.includes('classify') || prop.includes('run') || prop.includes('Classifier'))) {
-            metodosDisponibles.push(prop);
-        }
-    }
-    
-    if (metodosDisponibles.length > 0) {
-        alert("Métodos detectados en tu SDK: \n" + metodosDisponibles.join("\n") + "\n\nIniciando cámara...");
-    } else {
-        alert("No se detectó un método de clasificación obvio. Revisaremos la consola de comandos. Iniciando cámara...");
-    }
-    
-    startCamera();
-}
-
-// 2. Encender la cámara trasera del celular
+// 2. Encender la cámara del celular
 function startCamera() {
     const constraints = {
         video: { facingMode: "environment" },
@@ -97,60 +58,67 @@ function startCamera() {
             });
         })
         .catch(err => {
-            alert("Error de hardware al abrir cámara: " + err.name);
+            alert("Error al abrir la cámara: " + err.name);
         });
 }
 
-// 3. Procesar cuadro por cuadro
-function processFrame() {
-    if (!classifierModule) return;
+// 3. Procesar cuadro de video y clasificar
+async function processFrame() {
+    if (!classifier) return;
 
+    // Dibujar cámara en canvas
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    
+    // Capturar píxeles
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     
     try {
-        let result = null;
+        // Enviar píxeles al clasificador de Edge Impulse
+        // El SDK requiere un array plano con datos de color
+        const result = await classifier.classify(imgData.data);
         
-        // Intentar clasificar usando el método que se haya detectado
-        if (classifierInstance && typeof classifierInstance.classify === 'function') {
-            result = classifierInstance.classify(imgData.data, canvas.width, canvas.height);
-        } else if (typeof classifierModule.classify === 'function') {
-            result = classifierModule.classify(imgData.data, canvas.width, canvas.height);
-        }
-        
-        if (result && result.bounding_boxes) {
-            drawAndCount(result.bounding_boxes);
+        if (result && result.results) {
+            // Dibujar cuadros si es detección de objetos
+            drawAndCount(result.results);
         }
     } catch (e) {
-        console.error("Error en inferencia:", e);
+        console.error("Fallo durante la clasificación:", e);
     }
 
     requestAnimationFrame(processFrame);
 }
 
-// 4. Dibujar y contar
-function drawAndCount(boxes) {
+// 4. Dibujar en pantalla y contar las frutas
+function drawAndCount(predictions) {
     let limonesDetectados = 0;
     let naranjasDetectados = 0;
 
-    boxes.forEach(box => {
-        if (box.value > 0.60) {
-            ctx.strokeStyle = box.label.includes('limon') ? '#FFD700' : '#FF8C00';
-            ctx.lineWidth = 4;
-            ctx.strokeRect(box.x, box.y, box.width, box.height);
+    predictions.forEach(prediction => {
+        // Filtrar predicciones que tengan más del 60% de certeza
+        if (prediction.value > 0.60) {
+            
+            // Si tu modelo es de "detección de objetos" (bounding boxes)
+            if (prediction.x !== undefined && prediction.y !== undefined) {
+                ctx.strokeStyle = prediction.label.toLowerCase().includes('limon') || prediction.label.toLowerCase().includes('lemon') ? '#FFD700' : '#FF8C00';
+                ctx.lineWidth = 4;
+                ctx.strokeRect(prediction.x, prediction.y, prediction.width, prediction.height);
 
-            ctx.fillStyle = ctx.strokeStyle;
-            ctx.font = '16px Arial';
-            ctx.fillText(`${box.label} (${Math.round(box.value * 100)}%)`, box.x, box.y > 20 ? box.y - 5 : 20);
+                ctx.fillStyle = ctx.strokeStyle;
+                ctx.font = '16px Arial';
+                ctx.fillText(`${prediction.label} (${Math.round(prediction.value * 100)}%)`, prediction.x, prediction.y > 20 ? prediction.y - 5 : 20);
+            }
 
-            if (box.label === 'limon' || box.label === 'lemon') {
+            // Sumar al conteo según la etiqueta del modelo
+            const labelClean = prediction.label.toLowerCase();
+            if (labelClean === 'limon' || labelClean === 'lemon') {
                 limonesDetectados++;
-            } else if (box.label === 'naranja' || box.label === 'orange') {
+            } else if (labelClean === 'naranja' || labelClean === 'orange') {
                 naranjasDetectados++;
             }
         }
     });
 
+    // Actualizar números en el celular
     limonSpan.innerText = limonesDetectados;
     naranjasSpan.innerText = naranjasDetectados;
 }

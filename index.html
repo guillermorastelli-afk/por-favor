@@ -2,7 +2,6 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <!-- Optimizado para pantallas de celular -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Contador de Frutas</title>
     <style>
@@ -52,22 +51,23 @@
 </head>
 <body>
 
-    <!-- Panel de conteo flotante -->
     <div id="hud">
         <div class="counter" style="color: #FFD700;">🍋 Limones: <span id="limones">0</span></div>
         <div class="counter" style="color: #FF8C00;">🍊 Naranjas: <span id="naranjas">0</span></div>
     </div>
 
     <div id="canvas-container">
-        <!-- Cámara oculta que procesa el video -->
         <video id="webcam" autoplay playsinline muted style="display:none;"></video>
-        <!-- Canvas visible donde dibujamos el video y los cuadros de detección -->
         <canvas id="canvas"></canvas>
     </div>
 
-    <!-- 1. Importa primero el JS generado por Emscripten que ya tienes -->
+    <!-- Carga la librería de ayuda oficial de Edge Impulse -->
+    <script src="https://cdn.edgeimpulse.com/sdk/run-impulse/v1/run-impulse.js"></script>
+    
+    <!-- Carga tu archivo del modelo generado -->
     <script src="edge-impulse-standalone.js"></script> 
-    <!-- 2. Tu script de lógica de la aplicación -->
+    
+    <!-- Tu lógica de la aplicación -->
     <script src="app.js"></script>
 </body>
 </html>
