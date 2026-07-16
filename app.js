@@ -7,24 +7,45 @@ const naranjasSpan = document.getElementById('naranjas');
 
 let classifierModule = null;
 
-// 1. Inicializar el WebAssembly de Edge Impulse
-// El nombre "Module" u "EdgeImpulseClassifier" depende de cómo exportaste el SDK.
-// Usualmente se auto-ejecuta al cargar el script de Emscripten.
-Module().then(module => {
-    classifierModule = module;
-    console.log("Modelo cargado exitosamente.");
-    startCamera();
+// Forzar alertas en el celular para saber exactamente qué falla
+window.onerror = function(message, source, lineno, colno, error) {
+    alert("Error de JavaScript: " + message + " en línea " + lineno);
+    return false;
+};
+
+// 1. Esperar a que la página cargue por completo
+window.addEventListener('load', () => {
+    console.log("Página cargada. Inicializando modelo...");
+    
+    // Comprobar si el script de Edge Impulse se cargó en el navegador
+    if (typeof Module === 'undefined') {
+        alert("Error crítico: El archivo 'edge-impulse-standalone.js' no se ha cargado. Verifica que el nombre en tu index.html sea exacto.");
+        return;
+    }
+
+    // Inicializar el WebAssembly de Edge Impulse
+    Module().then(module => {
+        classifierModule = module;
+        alert("¡Modelo cargado con éxito! Iniciando cámara...");
+        startCamera();
+    }).catch(err => {
+        alert("Error al inicializar el WebAssembly: " + err.message);
+    });
 });
 
-// 2. Encender la cámara trasera del celular
+// 2. Encender la cámara trasera del celular de forma ultra-compatible
 function startCamera() {
-    // Pedimos la cámara de la forma más compatible posible para celulares
     const constraints = {
         video: {
-            facingMode: "environment" // Fuerza la cámara trasera
+            facingMode: "environment" // Fuerza la cámara trasera del celular
         },
         audio: false
     };
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert("Tu navegador o tu conexión (HTTP) no soporta el acceso a la cámara. Asegúrate de usar HTTPS.");
+        return;
+    }
 
     navigator.mediaDevices.getUserMedia(constraints)
         .then(stream => {
@@ -36,56 +57,47 @@ function startCamera() {
             });
         })
         .catch(err => {
-            console.error("Error detallado de cámara: ", err);
-            // Esto nos dirá en la pantalla del celular qué está fallando exactamente
-            alert("Error al abrir la cámara: " + err.name + " - " + err.message);
+            alert("Error de hardware al abrir cámara: " + err.name + " - " + err.message);
         });
 }
-// 3. Procesar cuadro por cuadro de la cámara
+
+// 3. Procesar cuadro por cuadro
 function processFrame() {
     if (!classifierModule) return;
 
-    // Dibujar el cuadro actual de la cámara en el Canvas invisible
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    // Obtener los píxeles de la cámara para pasárselos al modelo
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     
-    // Convertir la imagen a formato de entrada que espera Edge Impulse (usualmente RGB en array plano)
-    // El SDK de Edge Impulse provee funciones para clasificar directamente desde arrays de píxeles:
-    
-    // NOTA: La firma exacta de la función depende de la versión de tu SDK. 
-    // Usualmente ejecutas algo como:
-    let result = classifierModule.classify(imgData.data, canvas.width, canvas.height);
-
-    if (result && result.bounding_boxes) {
-        drawAndCount(result.bounding_boxes);
+    // Aquí ejecutamos la clasificación de tu SDK de Edge Impulse
+    // Nota: Si el SDK de tu modelo requiere parámetros diferentes, lo veremos en la alerta
+    try {
+        let result = classifierModule.classify(imgData.data, canvas.width, canvas.height);
+        if (result && result.bounding_boxes) {
+            drawAndCount(result.bounding_boxes);
+        }
+    } catch (e) {
+        // Evitamos alertas infinitas en el bucle de video, solo imprimimos en consola
+        console.error("Error en inferencia:", e);
     }
 
-    // Repetir en el siguiente cuadro (loop continuo)
     requestAnimationFrame(processFrame);
 }
 
-// 4. Dibujar los cuadros de detección y actualizar los contadores
+// 4. Dibujar y contar
 function drawAndCount(boxes) {
     let limonesDetectados = 0;
     let naranjasDetectados = 0;
 
     boxes.forEach(box => {
-        // Filtro de confianza: Ajusta este valor (0.60 = 60%) según la precisión que busques
         if (box.value > 0.60) {
-            
-            // Dibujar rectángulo alrededor de la fruta detectada
             ctx.strokeStyle = box.label.includes('limon') ? '#FFD700' : '#FF8C00';
             ctx.lineWidth = 4;
             ctx.strokeRect(box.x, box.y, box.width, box.height);
 
-            // Dibujar etiqueta de texto encima del rectángulo
             ctx.fillStyle = ctx.strokeStyle;
             ctx.font = '16px Arial';
             ctx.fillText(`${box.label} (${Math.round(box.value * 100)}%)`, box.x, box.y > 20 ? box.y - 5 : 20);
 
-            // Clasificación del conteo (Fíjate si tus labels se llaman exactamente así en Edge Impulse)
             if (box.label === 'limon' || box.label === 'lemon') {
                 limonesDetectados++;
             } else if (box.label === 'naranja' || box.label === 'orange') {
@@ -94,7 +106,6 @@ function drawAndCount(boxes) {
         }
     });
 
-    // Actualizar el texto en el HUD de la pantalla del celular
     limonSpan.innerText = limonesDetectados;
     naranjasSpan.innerText = naranjasDetectados;
 }
