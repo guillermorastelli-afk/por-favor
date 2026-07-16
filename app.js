@@ -18,12 +18,10 @@ Module().then(module => {
 
 // 2. Encender la cámara trasera del celular
 function startCamera() {
+    // Pedimos la cámara de la forma más compatible posible para celulares
     const constraints = {
         video: {
-            // "environment" fuerza el uso de la cámara trasera del celular
-            facingMode: "environment", 
-            width: { ideal: 640 },
-            height: { ideal: 480 }
+            facingMode: "environment" // Fuerza la cámara trasera
         },
         audio: false
     };
@@ -32,19 +30,17 @@ function startCamera() {
         .then(stream => {
             video.srcObject = stream;
             video.addEventListener('loadedmetadata', () => {
-                // Ajustar resolución del lienzo al tamaño de la cámara
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
-                // Comenzar ciclo de procesamiento
                 requestAnimationFrame(processFrame);
             });
         })
         .catch(err => {
-            console.error("Error accediendo a la cámara del celular: ", err);
-            alert("Por favor, permite el acceso a la cámara.");
+            console.error("Error detallado de cámara: ", err);
+            // Esto nos dirá en la pantalla del celular qué está fallando exactamente
+            alert("Error al abrir la cámara: " + err.name + " - " + err.message);
         });
 }
-
 // 3. Procesar cuadro por cuadro de la cámara
 function processFrame() {
     if (!classifierModule) return;
