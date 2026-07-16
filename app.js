@@ -7,7 +7,7 @@ const naranjasSpan = document.getElementById('naranjas');
 
 let classifierModule = null;
 
-// Forzar alertas en el celular para saber exactamente qué falla
+// Forzar alertas en el celular si ocurre algún fallo en JS
 window.onerror = function(message, source, lineno, colno, error) {
     alert("Error de JavaScript: " + message + " en línea " + lineno);
     return false;
@@ -23,14 +23,36 @@ window.addEventListener('load', () => {
         return;
     }
 
-    // Inicializar el WebAssembly de Edge Impulse
-    Module().then(module => {
-        classifierModule = module;
-        alert("¡Modelo cargado con éxito! Iniciando cámara...");
-        startCamera();
-    }).catch(err => {
-        alert("Error al inicializar el WebAssembly: " + err.message);
-    });
+    // Intentar inicializar de forma compatible (por función/promesa o por objeto de Emscripten)
+    try {
+        if (typeof Module === 'function') {
+            // Caso A: Module es una función/promesa
+            Module().then(module => {
+                classifierModule = module;
+                alert("¡Modelo cargado con éxito! Iniciando cámara...");
+                startCamera();
+            }).catch(err => {
+                alert("Error al inicializar el WebAssembly (Función): " + err.message);
+            });
+        } else if (typeof Module === 'object') {
+            // Caso B: Module es un objeto global ya inicializado o que usa onRuntimeInitialized
+            classifierModule = Module;
+            
+            // Si tiene callback de carga de Emscripten, esperamos a que esté listo
+            if (Module.onRuntimeInitialized) {
+                Module.onRuntimeInitialized = function() {
+                    alert("¡Modelo cargado con éxito (Runtime)! Iniciando cámara...");
+                    startCamera();
+                };
+            } else {
+                // Si ya está listo directamente
+                alert("¡Modelo cargado con éxito (Objeto)! Iniciando cámara...");
+                startCamera();
+            }
+        }
+    } catch (err) {
+        alert("Error durante la inicialización del modelo: " + err.message);
+    }
 });
 
 // 2. Encender la cámara trasera del celular de forma ultra-compatible
@@ -43,7 +65,7 @@ function startCamera() {
     };
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        alert("Tu navegador o tu conexión (HTTP) no soporta el acceso a la cámara. Asegúrate de usar HTTPS.");
+        alert("Tu navegador o tu conexión (HTTP) no soporta el acceso a la cámara. Asegúrate de usar HTTPS en GitHub.");
         return;
     }
 
@@ -68,8 +90,7 @@ function processFrame() {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     
-    // Aquí ejecutamos la clasificación de tu SDK de Edge Impulse
-    // Nota: Si el SDK de tu modelo requiere parámetros diferentes, lo veremos en la alerta
+    // Ejecutar la clasificación del SDK de Edge Impulse
     try {
         let result = classifierModule.classify(imgData.data, canvas.width, canvas.height);
         if (result && result.bounding_boxes) {
