@@ -26,15 +26,12 @@
         }
         classify(features, raw = false) {
             if (!this._module) throw new Error("Clasificador no inicializado.");
-            
             const obj = this._arrayToHeap(features);
             let resultPointer = this._module._run_classifier(obj.buffer, obj.size, raw);
             this._module._free(obj.buffer);
-            
             if (resultPointer === 0) {
                 throw new Error("La inferencia del clasificador falló.");
             }
-            
             const resultStr = this._module.UTF8ToString(resultPointer);
             return JSON.parse(resultStr);
         }
@@ -46,17 +43,14 @@
             const dataPtr = this._module._malloc(nDataBytes);
             const dataHeap = new Uint8Array(this._module.HEAPU8.buffer, dataPtr, nDataBytes);
             dataHeap.set(new Uint8Array(typedArray.buffer, typedArray.byteOffset, nDataBytes));
-            return {
-                buffer: dataPtr,
-                size: typedArray.length
-            };
+            return { buffer: dataPtr, size: typedArray.length };
         }
     }
     window.EdgeImpulseClassifier = EdgeImpulseClassifier;
 })();
 
 // ==========================================
-// LÓGICA DE LA CÁMARA Y CONTEO DE FRUTAS
+// LÓGICA DE LA CÁMARA Y CONTEO
 // ==========================================
 const video = document.getElementById('webcam');
 const canvas = document.getElementById('canvas');
@@ -67,19 +61,19 @@ const naranjasSpan = document.getElementById('naranjas');
 
 let classifier = null;
 
-// Tamaño del modelo (por defecto 96x96, FOMO de Edge Impulse)
-const MODEL_WIDTH = 320; 
-const MODEL_HEIGHT = 320;
+// Forzar dimensiones comunes para el redimensionado
+const MODEL_WIDTH = 96; 
+const MODEL_HEIGHT = 96;
 
 const resizeCanvas = document.createElement('canvas');
 resizeCanvas.width = MODEL_WIDTH;
 resizeCanvas.height = MODEL_HEIGHT;
 const resizeCtx = resizeCanvas.getContext('2d');
 
-// Elemento flotante para ver logs en tiempo real en la pantalla del celular
+// Div de diagnóstico flotante para ver respuestas crudas del sistema en el celular
 const debugDiv = document.createElement('div');
 debugDiv.style.position = 'absolute';
-debugDiv.style.bottom = '20px';
+debugDiv.style.bottom = '10px';
 debugDiv.style.left = '10px';
 debugDiv.style.right = '10px';
 debugDiv.style.background = 'rgba(0,0,0,0.85)';
@@ -88,74 +82,62 @@ debugDiv.style.padding = '10px';
 debugDiv.style.fontSize = '12px';
 debugDiv.style.fontFamily = 'monospace';
 debugDiv.style.zIndex = '999';
-debugDiv.style.maxHeight = '150px';
+debugDiv.style.maxHeight = '140px';
 debugDiv.style.overflowY = 'auto';
 debugDiv.style.borderRadius = '5px';
 document.body.appendChild(debugDiv);
 
 function logToScreen(text) {
     debugDiv.innerHTML = text + "<br>" + debugDiv.innerHTML;
-    // Mantener solo los últimos mensajes para no saturar
     const lines = debugDiv.innerHTML.split('<br>');
-    if (lines.length > 8) {
-        debugDiv.innerHTML = lines.slice(0, 8).join('<br>');
-    }
+    if (lines.length > 6) debugDiv.innerHTML = lines.slice(0, 6).join('<br>');
 }
 
 window.onerror = function(message, source, lineno, colno, error) {
-    logToScreen("ERROR JS: " + message + " en línea " + lineno);
+    logToScreen("ERROR JS: " + message);
     return false;
 };
 
 // 1. Inicializar clasificador
 window.addEventListener('load', async () => {
-    logToScreen("Iniciando carga de componentes...");
+    logToScreen("Cargando modelo...");
     try {
         if (typeof Module === 'undefined') {
-            logToScreen("Error: No se detectó 'edge-impulse-standalone.js'");
+            logToScreen("Error: 'edge-impulse-standalone.js' no cargado.");
             return;
         }
-
         classifier = new window.EdgeImpulseClassifier(Module);
         await classifier.init();
-        logToScreen("¡Modelo cargado correctamente!");
+        logToScreen("¡Modelo cargado con éxito!");
         startCamera();
-        
     } catch (err) {
-        logToScreen("Error cargando el modelo: " + err.message);
+        logToScreen("Fallo carga: " + err.message);
     }
 });
 
-// 2. Encender cámara trasera
+// 2. Encender cámara
 function startCamera() {
-    const constraints = {
-        video: { facingMode: "environment" },
-        audio: false
-    };
-
+    const constraints = { video: { facingMode: "environment" }, audio: false };
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        logToScreen("Dispositivo no soporta getUserMedia");
+        logToScreen("Cámara no soportada.");
         return;
     }
-
     navigator.mediaDevices.getUserMedia(constraints)
         .then(stream => {
             video.srcObject = stream;
             video.addEventListener('loadedmetadata', () => {
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
-                logToScreen("Cámara activa: " + canvas.width + "x" + canvas.height);
+                logToScreen("Video activo: " + canvas.width + "x" + canvas.height);
                 requestAnimationFrame(processFrame);
             });
         })
-        .catch(err => {
-            logToScreen("Error cámara: " + err.name);
-        });
+        .catch(err => { logToScreen("Error cámara: " + err.name); });
 }
 
-let counter = 0;
+let testNormalizado = true; // Alternará en caso de error de clasificación
 
-// 3. Redimensionar y clasificar
+// 3. Procesar y Clasificar (Soporta Normalizado, No Normalizado, FOMO y Clasificación clásica)
 async function processFrame() {
     if (!classifier) return;
 
@@ -170,70 +152,99 @@ async function processFrame() {
 
     let rgbIndex = 0;
     for (let i = 0; i < data.length; i += 4) {
-        rgbData[rgbIndex++] = data[i] / 255.0;     // R
-        rgbData[rgbIndex++] = data[i + 1] / 255.0; // G
-        rgbData[rgbIndex++] = data[i + 2] / 255.0; // B
+        // Si 'testNormalizado' es true divide por 255 (0 a 1), si no, pasa el color directo (0 a 255)
+        const factor = testNormalizado ? 255.0 : 1.0;
+        rgbData[rgbIndex++] = data[i] / factor;     // R
+        rgbData[rgbIndex++] = data[i + 1] / factor; // G
+        rgbData[rgbIndex++] = data[i + 2] / factor; // B
     }
     
     try {
         const result = await classifier.classify(rgbData);
         
-        counter++;
-        // Cada 60 cuadros (aprox 2 segundos), mostramos qué responde el modelo
-        if (counter % 60 === 0) {
-            logToScreen("Respuesta raw del modelo: " + JSON.stringify(result).substring(0, 100));
-        }
-
         if (result) {
-            const predictions = result.bounding_boxes || result.results || [];
-            drawAndCount(predictions);
+            // Caso A: El modelo es de detección de objetos (FOMO / Bounding Boxes)
+            if (result.bounding_boxes && result.bounding_boxes.length > 0) {
+                drawAndCountBoxes(result.bounding_boxes);
+            } 
+            // Caso B: El modelo es de clasificación de imagen completa
+            else if (result.results && result.results.length > 0) {
+                showClassificationResults(result.results);
+            }
         }
     } catch (e) {
-        logToScreen("Fallo en inferencia: " + e.message);
+        console.error("Fallo clasificación:", e);
+        // Si falla con decimales (0-1), intentamos con rango entero (0-255) en el siguiente frame
+        testNormalizado = !testNormalizado;
     }
 
     requestAnimationFrame(processFrame);
 }
 
-// 4. Dibujar predicciones
-function drawAndCount(predictions) {
-    let limonesDetectados = 0;
-    let naranjasDetectados = 0;
+// 4. Dibujar si tu modelo es de localización (Detección de Objetos)
+function drawAndCountBoxes(predictions) {
+    let limones = 0;
+    let naranjas = 0;
 
     const scaleX = canvas.width / MODEL_WIDTH;
     const scaleY = canvas.height / MODEL_HEIGHT;
 
     predictions.forEach(prediction => {
-        // Umbral bajo (10%) solo para ver si está detectando algo en depuración
-        if (prediction.value > 0.10) {
+        if (prediction.value > 0.40) {
+            const realX = prediction.x * scaleX;
+            const realY = prediction.y * scaleY;
+            const realWidth = prediction.width * scaleX;
+            const realHeight = prediction.height * scaleY;
+
+            const labelLower = prediction.label.toLowerCase();
+            const esLimon = labelLower.includes('limon') || labelLower.includes('lemon');
             
-            if (prediction.x !== undefined && prediction.y !== undefined) {
-                const realX = prediction.x * scaleX;
-                const realY = prediction.y * scaleY;
-                const realWidth = prediction.width * scaleX;
-                const realHeight = prediction.height * scaleY;
+            ctx.strokeStyle = esLimon ? '#FFD700' : '#FF8C00';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(realX, realY, realWidth, realHeight);
 
-                const labelLower = prediction.label.toLowerCase();
-                const esLimon = labelLower.includes('limon') || labelLower.includes('lemon');
-                
-                ctx.strokeStyle = esLimon ? '#FFD700' : '#FF8C00';
-                ctx.lineWidth = 4;
-                ctx.strokeRect(realX, realY, realWidth, realHeight);
+            ctx.fillStyle = ctx.strokeStyle;
+            ctx.font = 'bold 18px Arial';
+            ctx.fillText(`${prediction.label} (${Math.round(prediction.value * 100)}%)`, realX, realY > 20 ? realY - 5 : 20);
 
-                ctx.fillStyle = ctx.strokeStyle;
-                ctx.font = 'bold 18px Arial';
-                ctx.fillText(`${prediction.label} (${Math.round(prediction.value * 100)}%)`, realX, realY > 20 ? realY - 5 : 20);
-            }
+            if (esLimon) limones++;
+            else naranjas++;
+        }
+    });
 
-            const labelClean = prediction.label.toLowerCase();
-            if (labelClean === 'limon' || labelClean === 'lemon') {
-                limonesDetectados++;
-            } else if (labelClean === 'naranja' || labelClean === 'orange') {
-                naranjasDetectados++;
+    limonSpan.innerText = limones;
+    naranjasSpan.innerText = naranjas;
+}
+
+// 5. Mostrar texto si tu modelo clasifica la imagen completa (No usa cajas de selección)
+function showClassificationResults(results) {
+    let textoResultado = "Detectando: ";
+    let limones = 0;
+    let naranjas = 0;
+
+    results.forEach(prediction => {
+        const valuePercent = Math.round(prediction.value * 100);
+        textoResultado += `${prediction.label}: ${valuePercent}% | `;
+
+        // Si la certeza de lo que ve el celular supera el 60%
+        if (prediction.value > 0.60) {
+            const labelLower = prediction.label.toLowerCase();
+            if (labelLower.includes('limon') || labelLower.includes('lemon')) {
+                limones = 1; // Clasifica la escena como un limón
+            } else if (labelLower.includes('naranja') || labelLower.includes('orange')) {
+                naranjas = 1; // Clasifica la escena como una naranja
             }
         }
     });
 
-    limonSpan.innerText = limonesDetectados;
-    naranjasSpan.innerText = naranjasDetectados;
+    // Mostrar qué clase predomina arriba en los contadores
+    limonSpan.innerText = limones;
+    naranjasSpan.innerText = naranjas;
+
+    // Pintar los porcentajes en texto gigante en el centro para depurar
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.fillRect(10, canvas.height - 100, canvas.width - 20, 50);
+    ctx.fillStyle = "#FFFFFF";
+    ctx.font = "16px Arial";
+    ctx.fillText(textoResultado, 20, canvas.height - 70);
 }
