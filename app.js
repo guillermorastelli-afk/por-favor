@@ -27,20 +27,14 @@
         classify(features, raw = false) {
             if (!this._module) throw new Error("Clasificador no inicializado.");
             
-            // Asignar memoria en WebAssembly para las características procesadas
             const obj = this._arrayToHeap(features);
-            
-            // Invocar la clasificación en el WebAssembly compilado
             let resultPointer = this._module._run_classifier(obj.buffer, obj.size, raw);
-            
-            // Liberar la memoria reservada para no colapsar el celular
             this._module._free(obj.buffer);
             
             if (resultPointer === 0) {
                 throw new Error("La inferencia del clasificador falló.");
             }
             
-            // Retornar la respuesta mapeada como texto/JSON
             const resultStr = this._module.UTF8ToString(resultPointer);
             return JSON.parse(resultStr);
         }
@@ -73,27 +67,37 @@ const naranjasSpan = document.getElementById('naranjas');
 
 let classifier = null;
 
-// Reportar errores visuales en el celular
+// ========================================================
+// ⚠️ AJUSTA AQUÍ EL TAMAÑO DE ENTRADA DE TU MODELO
+// La mayoría de proyectos FOMO en Edge Impulse usan 96x96.
+// Si usaste MobileNet, podría ser 160x160 o 320x320.
+// ========================================================
+const MODEL_WIDTH = 320; 
+const MODEL_HEIGHT = 320;
+
+// Crear un pequeño canvas oculto en memoria para redimensionar la imagen
+const resizeCanvas = document.createElement('canvas');
+resizeCanvas.width = MODEL_WIDTH;
+resizeCanvas.height = MODEL_HEIGHT;
+const resizeCtx = resizeCanvas.getContext('2d');
+
 window.onerror = function(message, source, lineno, colno, error) {
     alert("Error: " + message + " en línea " + lineno);
     return false;
 };
 
-// 1. Inicializar el clasificador unificado
+// 1. Inicializar clasificador
 window.addEventListener('load', async () => {
-    console.log("Inicializando clasificador unificado...");
-    
     try {
         if (typeof Module === 'undefined') {
-            alert("Error crítico: No se detectó 'edge-impulse-standalone.js'. Verifica que esté en la misma carpeta.");
+            alert("Error crítico: No se detectó 'edge-impulse-standalone.js'.");
             return;
         }
 
-        // Crear instancia usando la clase que integramos arriba
         classifier = new window.EdgeImpulseClassifier(Module);
         await classifier.init();
         
-        alert("¡Modelo cargado correctamente! Iniciando cámara...");
+        alert("¡Modelo cargado! Tamaño esperado: " + MODEL_WIDTH + "x" + MODEL_HEIGHT + ". Iniciando cámara...");
         startCamera();
         
     } catch (err) {
@@ -101,7 +105,7 @@ window.addEventListener('load', async () => {
     }
 });
 
-// 2. Encender la cámara del celular
+// 2. Encender cámara trasera
 function startCamera() {
     const constraints = {
         video: { facingMode: "environment" },
@@ -109,7 +113,7 @@ function startCamera() {
     };
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        alert("Tu navegador o conexión (HTTP) no soporta el acceso a la cámara.");
+        alert("Navegador incompatible con cámara web.");
         return;
     }
 
@@ -123,79 +127,82 @@ function startCamera() {
             });
         })
         .catch(err => {
-            alert("Error al abrir la cámara: " + err.name + " - " + err.message);
+            alert("Error al abrir cámara: " + err.name);
         });
 }
 
-// 3. Procesar cuadro, convertir píxeles a RGB y clasificar
+// 3. Redimensionar y clasificar
 async function processFrame() {
     if (!classifier) return;
 
-    // Dibujar el cuadro actual de la cámara en el canvas visible
+    // A. Dibujar el video en el canvas grande de la pantalla
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    // Obtener los datos RGBA crudos de la imagen
-    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    // B. Dibujar el video en tamaño miniatura para el modelo (ej. 96x96)
+    resizeCtx.drawImage(video, 0, 0, MODEL_WIDTH, MODEL_HEIGHT);
+    
+    // C. Tomar píxeles de la miniatura
+    const imgData = resizeCtx.getImageData(0, 0, MODEL_WIDTH, MODEL_HEIGHT);
     const data = imgData.data;
 
-    // CONVERSIÓN CRÍTICA: Edge Impulse necesita RGB plano (no RGBA).
-    // Convertimos cada píxel eliminando el canal Alpha y normalizándolo de 0 a 1 si es necesario.
-    const numPixels = canvas.width * canvas.height;
+    // D. Convertir RGBA miniatura a RGB normalizado de 0 a 1 para Edge Impulse
+    const numPixels = MODEL_WIDTH * MODEL_HEIGHT;
     const rgbData = new Float32Array(numPixels * 3);
 
     let rgbIndex = 0;
     for (let i = 0; i < data.length; i += 4) {
-        // Obtenemos los valores de Rojo, Verde y Azul (RGB)
-        // Convertimos el rango de 0-255 a 0-1 flotante dividiendo por 255.
-        // (La mayoría de los modelos de Edge Impulse esperan esta normalización)
         rgbData[rgbIndex++] = data[i] / 255.0;     // R
         rgbData[rgbIndex++] = data[i + 1] / 255.0; // G
         rgbData[rgbIndex++] = data[i + 2] / 255.0; // B
-        // Saltamos data[i+3] que es el canal Alpha (transparencia)
     }
     
     try {
-        // Enviar el nuevo array RGB plano optimizado al clasificador
+        // Ejecutar inferencia con la miniatura procesada
         const result = await classifier.classify(rgbData);
         
-        // Si tu modelo es de detección de objetos, las cajas vienen en "bounding_boxes"
-        // Si es clasificación clásica de imagen completa, viene en "results"
         if (result) {
             const predictions = result.bounding_boxes || result.results || [];
             drawAndCount(predictions);
         }
     } catch (e) {
-        console.error("Fallo durante la clasificación:", e);
+        console.error("Error inferencia:", e);
     }
 
     requestAnimationFrame(processFrame);
 }
 
-// 4. Dibujar en pantalla y contar las frutas
+// 4. Dibujar predicciones (y re-escalar las coordenadas de vuelta a la pantalla)
 function drawAndCount(predictions) {
     let limonesDetectados = 0;
     let naranjasDetectados = 0;
 
+    // Factor de escala para convertir las coordenadas del mini-canvas (96x96) al canvas visible (celular)
+    const scaleX = canvas.width / MODEL_WIDTH;
+    const scaleY = canvas.height / MODEL_HEIGHT;
+
     predictions.forEach(prediction => {
-        // Filtrar predicciones que tengan más del 50% de certeza (0.50)
-        // Bajamos ligeramente a 50% para asegurarnos de que pinte algo si el modelo está dudando
-        if (prediction.value > 0.50) {
+        // Reducimos el umbral de detección a 40% (0.40) para maximizar la probabilidad de que muestre algo
+        if (prediction.value > 0.40) {
             
-            // Dibujar cuadros si es detección de objetos (bounding boxes)
             if (prediction.x !== undefined && prediction.y !== undefined) {
+                // Ajustar posición del cuadro del tamaño miniatura al tamaño real del celular
+                const realX = prediction.x * scaleX;
+                const realY = prediction.y * scaleY;
+                const realWidth = prediction.width * scaleX;
+                const realHeight = prediction.height * scaleY;
+
                 const labelLower = prediction.label.toLowerCase();
                 const esLimon = labelLower.includes('limon') || labelLower.includes('lemon');
                 
                 ctx.strokeStyle = esLimon ? '#FFD700' : '#FF8C00';
                 ctx.lineWidth = 4;
-                ctx.strokeRect(prediction.x, prediction.y, prediction.width, prediction.height);
+                ctx.strokeRect(realX, realY, realWidth, realHeight);
 
                 ctx.fillStyle = ctx.strokeStyle;
-                ctx.font = '16px Arial';
-                ctx.fillText(`${prediction.label} (${Math.round(prediction.value * 100)}%)`, prediction.x, prediction.y > 20 ? prediction.y - 5 : 20);
+                ctx.font = 'bold 18px Arial';
+                ctx.fillText(`${prediction.label} (${Math.round(prediction.value * 100)}%)`, realX, realY > 20 ? realY - 5 : 20);
             }
 
-            // Sumar al conteo según la etiqueta del modelo
             const labelClean = prediction.label.toLowerCase();
             if (labelClean === 'limon' || labelClean === 'lemon') {
                 limonesDetectados++;
@@ -205,7 +212,6 @@ function drawAndCount(predictions) {
         }
     });
 
-    // Actualizar números en la pantalla del celular
     limonSpan.innerText = limonesDetectados;
     naranjasSpan.innerText = naranjasDetectados;
 }
