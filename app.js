@@ -67,41 +67,62 @@ const naranjasSpan = document.getElementById('naranjas');
 
 let classifier = null;
 
-// ========================================================
-// ⚠️ AJUSTA AQUÍ EL TAMAÑO DE ENTRADA DE TU MODELO
-// La mayoría de proyectos FOMO en Edge Impulse usan 96x96.
-// Si usaste MobileNet, podría ser 160x160 o 320x320.
-// ========================================================
+// Tamaño del modelo (por defecto 96x96, FOMO de Edge Impulse)
 const MODEL_WIDTH = 320; 
 const MODEL_HEIGHT = 320;
 
-// Crear un pequeño canvas oculto en memoria para redimensionar la imagen
 const resizeCanvas = document.createElement('canvas');
 resizeCanvas.width = MODEL_WIDTH;
 resizeCanvas.height = MODEL_HEIGHT;
 const resizeCtx = resizeCanvas.getContext('2d');
 
+// Elemento flotante para ver logs en tiempo real en la pantalla del celular
+const debugDiv = document.createElement('div');
+debugDiv.style.position = 'absolute';
+debugDiv.style.bottom = '20px';
+debugDiv.style.left = '10px';
+debugDiv.style.right = '10px';
+debugDiv.style.background = 'rgba(0,0,0,0.85)';
+debugDiv.style.color = '#00FF00';
+debugDiv.style.padding = '10px';
+debugDiv.style.fontSize = '12px';
+debugDiv.style.fontFamily = 'monospace';
+debugDiv.style.zIndex = '999';
+debugDiv.style.maxHeight = '150px';
+debugDiv.style.overflowY = 'auto';
+debugDiv.style.borderRadius = '5px';
+document.body.appendChild(debugDiv);
+
+function logToScreen(text) {
+    debugDiv.innerHTML = text + "<br>" + debugDiv.innerHTML;
+    // Mantener solo los últimos mensajes para no saturar
+    const lines = debugDiv.innerHTML.split('<br>');
+    if (lines.length > 8) {
+        debugDiv.innerHTML = lines.slice(0, 8).join('<br>');
+    }
+}
+
 window.onerror = function(message, source, lineno, colno, error) {
-    alert("Error: " + message + " en línea " + lineno);
+    logToScreen("ERROR JS: " + message + " en línea " + lineno);
     return false;
 };
 
 // 1. Inicializar clasificador
 window.addEventListener('load', async () => {
+    logToScreen("Iniciando carga de componentes...");
     try {
         if (typeof Module === 'undefined') {
-            alert("Error crítico: No se detectó 'edge-impulse-standalone.js'.");
+            logToScreen("Error: No se detectó 'edge-impulse-standalone.js'");
             return;
         }
 
         classifier = new window.EdgeImpulseClassifier(Module);
         await classifier.init();
-        
-        alert("¡Modelo cargado! Tamaño esperado: " + MODEL_WIDTH + "x" + MODEL_HEIGHT + ". Iniciando cámara...");
+        logToScreen("¡Modelo cargado correctamente!");
         startCamera();
         
     } catch (err) {
-        alert("Error cargando el modelo: " + err.message);
+        logToScreen("Error cargando el modelo: " + err.message);
     }
 });
 
@@ -113,7 +134,7 @@ function startCamera() {
     };
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        alert("Navegador incompatible con cámara web.");
+        logToScreen("Dispositivo no soporta getUserMedia");
         return;
     }
 
@@ -123,29 +144,27 @@ function startCamera() {
             video.addEventListener('loadedmetadata', () => {
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
+                logToScreen("Cámara activa: " + canvas.width + "x" + canvas.height);
                 requestAnimationFrame(processFrame);
             });
         })
         .catch(err => {
-            alert("Error al abrir cámara: " + err.name);
+            logToScreen("Error cámara: " + err.name);
         });
 }
+
+let counter = 0;
 
 // 3. Redimensionar y clasificar
 async function processFrame() {
     if (!classifier) return;
 
-    // A. Dibujar el video en el canvas grande de la pantalla
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    
-    // B. Dibujar el video en tamaño miniatura para el modelo (ej. 96x96)
     resizeCtx.drawImage(video, 0, 0, MODEL_WIDTH, MODEL_HEIGHT);
     
-    // C. Tomar píxeles de la miniatura
     const imgData = resizeCtx.getImageData(0, 0, MODEL_WIDTH, MODEL_HEIGHT);
     const data = imgData.data;
 
-    // D. Convertir RGBA miniatura a RGB normalizado de 0 a 1 para Edge Impulse
     const numPixels = MODEL_WIDTH * MODEL_HEIGHT;
     const rgbData = new Float32Array(numPixels * 3);
 
@@ -157,35 +176,38 @@ async function processFrame() {
     }
     
     try {
-        // Ejecutar inferencia con la miniatura procesada
         const result = await classifier.classify(rgbData);
         
+        counter++;
+        // Cada 60 cuadros (aprox 2 segundos), mostramos qué responde el modelo
+        if (counter % 60 === 0) {
+            logToScreen("Respuesta raw del modelo: " + JSON.stringify(result).substring(0, 100));
+        }
+
         if (result) {
             const predictions = result.bounding_boxes || result.results || [];
             drawAndCount(predictions);
         }
     } catch (e) {
-        console.error("Error inferencia:", e);
+        logToScreen("Fallo en inferencia: " + e.message);
     }
 
     requestAnimationFrame(processFrame);
 }
 
-// 4. Dibujar predicciones (y re-escalar las coordenadas de vuelta a la pantalla)
+// 4. Dibujar predicciones
 function drawAndCount(predictions) {
     let limonesDetectados = 0;
     let naranjasDetectados = 0;
 
-    // Factor de escala para convertir las coordenadas del mini-canvas (96x96) al canvas visible (celular)
     const scaleX = canvas.width / MODEL_WIDTH;
     const scaleY = canvas.height / MODEL_HEIGHT;
 
     predictions.forEach(prediction => {
-        // Reducimos el umbral de detección a 40% (0.40) para maximizar la probabilidad de que muestre algo
-        if (prediction.value > 0.40) {
+        // Umbral bajo (10%) solo para ver si está detectando algo en depuración
+        if (prediction.value > 0.10) {
             
             if (prediction.x !== undefined && prediction.y !== undefined) {
-                // Ajustar posición del cuadro del tamaño miniatura al tamaño real del celular
                 const realX = prediction.x * scaleX;
                 const realY = prediction.y * scaleY;
                 const realWidth = prediction.width * scaleX;
